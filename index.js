@@ -65,166 +65,168 @@ function eWeLink(log, config, api) {
 
             this.webClient = request.createClient(url);
 
-            this.webClient.headers['Authorization'] = 'Bearer ' + this.authenticationToken;
-            this.webClient.get('/api/user/device', function(err, res, body) {
+            this.login(function() {
 
-                if (body.hasOwnProperty('error')) {
+                this.webClient.headers['Authorization'] = 'Bearer ' + this.authenticationToken;
+                this.webClient.get('/api/user/device', function(err, res, body) {
 
-                    var response = JSON.stringify(body);
+                    if (body.hasOwnProperty('error')) {
 
-                    platform.log("An error was encountered while requesting a list of devices. Response was [%s]", response);
+                        var response = JSON.stringify(body);
 
-                    if (body.error == '401') {
-                        platform.log("Verify that you have the correct authenticationToken specified in your configuration. The currently-configured token is [%s]", platform.authenticationToken);
+                        platform.log("An error was encountered while requesting a list of devices. Response was [%s]", response);
 
+                        if (body.error == '401') {
+                            platform.log("Verify that you have the correct authenticationToken specified in your configuration. The currently-configured token is [%s]", platform.authenticationToken);
+
+                        }
+
+                        return;
                     }
 
-                    return;
-                }
+                    var size = Object.keys(body).length;
+                    platform.log("eWeLink HTTPS API reports that there are a total of [%s] devices registered", size);
 
-                var size = Object.keys(body).length;
-                platform.log("eWeLink HTTPS API reports that there are a total of [%s] devices registered", size);
+                    if (size == 0) {
+                        platform.log("As there were no devices were found, all devices have been removed from the platorm's cache. Please regiester your devices using the eWeLink app and restart HomeBridge");
+                        platform.accessories.clear();
+                        platform.api.unregisterPlatformAccessories("homebridge-eWeLink", "eWeLink", platform.accessories);
+                        return;
+                    }
 
-                if (size == 0) {
-                    platform.log("As there were no devices were found, all devices have been removed from the platorm's cache. Please regiester your devices using the eWeLink app and restart HomeBridge");
-                    platform.accessories.clear();
-                    platform.api.unregisterPlatformAccessories("homebridge-eWeLink", "eWeLink", platform.accessories);
-                    return;
-                }
+                    var devicesFromApi = new Map();
+                    var newDevicesToAdd = new Map();
 
-                var devicesFromApi = new Map();
-                var newDevicesToAdd = new Map();
+                    body.forEach((device) => {
+                        platform.apiKey = device.apikey;
+                        devicesFromApi.set(device.deviceid, device);
+                    })
 
-                body.forEach((device) => {
-                    platform.apiKey = device.apikey;
-                    devicesFromApi.set(device.deviceid, device);
-                })
+                    // Now we compare the cached devices against the web list
+                    platform.log("Evaluating if devices need to be removed...");
 
-                // Now we compare the cached devices against the web list
-                platform.log("Evaluating if devices need to be removed...");
-
-                function checkIfDeviceIsStillRegistered(value, deviceId, map) {
-
-                    var accessory = platform.accessories.get(deviceId);
-
-                    if (devicesFromApi.has(deviceId)) {
-                        platform.log('Device [%s] is regeistered with API. Nothing to do.', accessory.displayName);
-                    } else {
-                        platform.log('Device [%s], ID : [%s] was not present in the response from the API. It will be removed.', accessory.displayName, accessory.UUID);
-                        platform.removeAccessory(accessory);
-                    };
-                }
-
-                // If we have devices in our cache, check that they exist in the web response
-                if (platform.accessories.size > 0) {
-                    platform.log("Verifying that all cached devices are still registered with the API. Devices that are no longer registered with the API will be removed.");
-                    platform.accessories.forEach(checkIfDeviceIsStillRegistered);
-                }
-
-                platform.log("Evaluating if new devices need to be added...");
-
-                // Now we compare the cached devices against the web list
-                function checkIfDeviceIsAlreadyConfigured(value, deviceId, map) {
-                    if (platform.accessories.has(deviceId)) {
-
-                        platform.log('Device with ID [%s] is already configured. Ensuring that the configuration is current.', deviceId);
+                    function checkIfDeviceIsStillRegistered(value, deviceId, map) {
 
                         var accessory = platform.accessories.get(deviceId);
-                        var deviceInformationFromWebApi = devicesFromApi.get(deviceId);
 
-                        accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Name, deviceInformationFromWebApi.name);
-                        accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.SerialNumber, deviceInformationFromWebApi.extra.extra.mac);
-                        accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Manufacturer, deviceInformationFromWebApi.productModel);
-                        accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Model, deviceInformationFromWebApi.extra.extra.model);
-                        accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.FirmwareRevision, deviceInformationFromWebApi.params.fwVersion);
-                        platform.updatePowerStateCharacteristic(deviceId, deviceInformationFromWebApi.params.switch);
+                        if (devicesFromApi.has(deviceId)) {
+                            platform.log('Device [%s] is regeistered with API. Nothing to do.', accessory.displayName);
+                        } else {
+                            platform.log('Device [%s], ID : [%s] was not present in the response from the API. It will be removed.', accessory.displayName, accessory.UUID);
+                            platform.removeAccessory(accessory);
+                        };
+                    }
+
+                    // If we have devices in our cache, check that they exist in the web response
+                    if (platform.accessories.size > 0) {
+                        platform.log("Verifying that all cached devices are still registered with the API. Devices that are no longer registered with the API will be removed.");
+                        platform.accessories.forEach(checkIfDeviceIsStillRegistered);
+                    }
+
+                    platform.log("Evaluating if new devices need to be added...");
+
+                    // Now we compare the cached devices against the web list
+                    function checkIfDeviceIsAlreadyConfigured(value, deviceId, map) {
+                        if (platform.accessories.has(deviceId)) {
+
+                            platform.log('Device with ID [%s] is already configured. Ensuring that the configuration is current.', deviceId);
+
+                            var accessory = platform.accessories.get(deviceId);
+                            var deviceInformationFromWebApi = devicesFromApi.get(deviceId);
+
+                            accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Name, deviceInformationFromWebApi.name);
+                            accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.SerialNumber, deviceInformationFromWebApi.extra.extra.mac);
+                            accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Manufacturer, deviceInformationFromWebApi.productModel);
+                            accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Model, deviceInformationFromWebApi.extra.extra.model);
+                            accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.FirmwareRevision, deviceInformationFromWebApi.params.fwVersion);
+                            platform.updatePowerStateCharacteristic(deviceId, deviceInformationFromWebApi.params.switch);
 
 
-                    } else {
-                        var deviceToAdd = devicesFromApi.get(deviceId);
-                        platform.log('Device [%s], ID : [%s] will be added', deviceToAdd.name, deviceToAdd.deviceid);
-                        platform.addAccessory(deviceToAdd);
-                    };
-                }
+                        } else {
+                            var deviceToAdd = devicesFromApi.get(deviceId);
+                            platform.log('Device [%s], ID : [%s] will be added', deviceToAdd.name, deviceToAdd.deviceid);
+                            platform.addAccessory(deviceToAdd);
+                        };
+                    }
 
-                // Go through the web response to make sure that all the devices that are in the response do exist in the accessories map
-                if (devicesFromApi.size > 0) {
-                    devicesFromApi.forEach(checkIfDeviceIsAlreadyConfigured);
-                }
+                    // Go through the web response to make sure that all the devices that are in the response do exist in the accessories map
+                    if (devicesFromApi.size > 0) {
+                        devicesFromApi.forEach(checkIfDeviceIsAlreadyConfigured);
+                    }
 
-                platform.log("API key retrieved from web service is [%s]", platform.apiKey);
+                    platform.log("API key retrieved from web service is [%s]", platform.apiKey);
 
-                // We have our devices, now open a connection to the WebSocket API
+                    // We have our devices, now open a connection to the WebSocket API
 
-                var url = 'wss://' + platform.config['webSocketApi'] + ':8080/api/ws';
+                    var url = 'wss://' + platform.config['webSocketApi'] + ':8080/api/ws';
 
-                platform.log("Connecting to the WebSocket API at [%s]", url);
+                    platform.log("Connecting to the WebSocket API at [%s]", url);
 
-                platform.wsc = new WebSocketClient();
+                    platform.wsc = new WebSocketClient();
 
-                platform.wsc.open(url);
+                    platform.wsc.open(url);
 
-                platform.wsc.onmessage = function(message) {
+                    platform.wsc.onmessage = function(message) {
 
-                    platform.log("WebSocket messge received: ", message);
+                        platform.log("WebSocket messge received: ", message);
 
-                    var json = JSON.parse(message);
+                        var json = JSON.parse(message);
 
-                    if (json.hasOwnProperty("action")) {
+                        if (json.hasOwnProperty("action")) {
 
-                        if (json.action == 'update') {
+                            if (json.action == 'update') {
 
-                            platform.log("Update message received for device [%s]", json.deviceid);
+                                platform.log("Update message received for device [%s]", json.deviceid);
 
-                            if (json.hasOwnProperty("params") && json.params.hasOwnProperty("switch")) {
-                                platform.updatePowerStateCharacteristic(json.deviceid, json.params.switch);
+                                if (json.hasOwnProperty("params") && json.params.hasOwnProperty("switch")) {
+                                    platform.updatePowerStateCharacteristic(json.deviceid, json.params.switch);
+                                }
+
                             }
 
                         }
 
                     }
 
-                }
+                    platform.wsc.onopen = function(e) {
 
-                platform.wsc.onopen = function(e) {
+                        platform.isSocketOpen = true;
 
-                    platform.isSocketOpen = true;
+                        // We need to authenticate upon opening the connection
 
-                    // We need to authenticate upon opening the connection
+                        var time_stamp = new Date() / 1000;
+                        var ts = Math.floor(time_stamp);
 
-                    var time_stamp = new Date() / 1000;
-                    var ts = Math.floor(time_stamp);
+                        // Here's the eWeLink payload as discovered via Charles
+                        var payload = {};
+                        payload.action = "userOnline";
+                        payload.userAgent = 'app';
+                        payload.version = 6;
+                        payload.nonce = '' + nonce();
+                        payload.apkVesrion = "1.8";
+                        payload.os = 'ios';
+                        payload.at = config.authenticationToken;
+                        payload.apikey = platform.apiKey;
+                        payload.ts = '' + ts;
+                        payload.model = 'iPhone10,6';
+                        payload.romVersion = '11.1.2';
+                        payload.sequence = platform.getSequence();
 
-                    // Here's the eWeLink payload as discovered via Charles
-                    var payload = {};
-                    payload.action = "userOnline";
-                    payload.userAgent = 'app';
-                    payload.version = 6;
-                    payload.nonce = '' + nonce();
-                    payload.apkVesrion = "1.8";
-                    payload.os = 'ios';
-                    payload.at = config.authenticationToken;
-                    payload.apikey = platform.apiKey;
-                    payload.ts = '' + ts;
-                    payload.model = 'iPhone10,6';
-                    payload.romVersion = '11.1.2';
-                    payload.sequence = platform.getSequence();
+                        var string = JSON.stringify(payload);
 
-                    var string = JSON.stringify(payload);
+                        platform.log('Sending login request [%s]', string);
 
-                    platform.log('Sending login request [%s]', string);
+                        platform.wsc.send(string);
 
-                    platform.wsc.send(string);
+                    }
 
-                }
+                    platform.wsc.onclose = function(e) {
+                        platform.log("WebSocket was closed. Reason [%s]", e);
+                        platform.isSocketOpen = false;
+                    }
 
-                platform.wsc.onclose = function(e) {
-                    platform.log("WebSocket was closed. Reason [%s]", e);
-                    platform.isSocketOpen = false;
-                }
-
-            }); // End WebSocket
-
+                }); // End WebSocket
+            }.bind(this));
         }.bind(this));
     }
 }
@@ -464,6 +466,33 @@ eWeLink.prototype.removeAccessory = function(accessory) {
 
     this.api.unregisterPlatformAccessories('homebridge-eWeLink',
         'eWeLink', [accessory])
+}
+
+eWeLink.prototype.login = function(callback) {
+
+    this.log('Login to eWeLink platform with user credentials');
+
+    var data = {
+        password: "vivelavie",
+        email:"frederic.barthelet@gmail.com",
+        version:"6",
+        ts:"1535484792",
+        nonce:"nr8ebdq6",
+        appid:"oeVkj2lYFGnJu5XUtWisfW4utiN4u9Mq",
+        imei:"1DCBD16C-5F3F-4AA3-A4E5-2B1EE82A2A1F",
+        os:"iOS",
+        model:"iPhone X_iPhone10,6",
+        romVersion:"11.4.1",
+        appVersion:"3.5.3"
+    };
+
+    this.webClient.headers['Authorization'] = 'Sign zfSpWW/o/6McX4bh3vvn1APQn+Y485ln2lLk5FkCTeM=';
+    this.webClient.headers['Content-Type'] = 'application/json';
+    this.webClient.post('/api/user/login', data , function(err, res, body) {
+        this.log('Authentication token received [%s]', body.at);
+        this.authenticationToken = body.at;
+        callback();
+    });
 }
 
 /* WEB SOCKET STUFF */
